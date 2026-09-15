@@ -165,9 +165,32 @@ export async function seedDemoData(workspaceId: string, ownerId: string, brandNa
     },
   ];
 
+  // Demo hiring-team members — the seed data references people by name.
+  // Create a demo User per unique name so JobHiringTeamMember rows
+  // (which require a real userId) can point at them.
+  const teamNames = new Set<string>();
+  for (const j of jobsData) {
+    for (const m of j.hiringTeam ?? []) teamNames.add(m.name);
+  }
+  const teamUserIds: Record<string, string> = {};
+  for (const name of teamNames) {
+    const email = `${name.toLowerCase().replace(/[^a-z0-9]+/g, ".")}@demo.vellum.local`;
+    const u = await db.user.upsert({
+      where: { email },
+      update: { name },
+      create: { email, name },
+    });
+    teamUserIds[name] = u.id;
+    await db.membership.upsert({
+      where: { userId_workspaceId: { userId: u.id, workspaceId } },
+      update: {},
+      create: { userId: u.id, workspaceId, role: "member" },
+    });
+  }
+
   const createdJobs: Record<string, string> = {};
   for (const j of jobsData) {
-    const { slug, salaryCurrency, status, ...rest } = j as any;
+    const { slug, salaryCurrency, status, hiringTeam, ...rest } = j as any;
     const job = await db.job.create({
       data: {
         workspaceId,
@@ -175,6 +198,12 @@ export async function seedDemoData(workspaceId: string, ownerId: string, brandNa
         status,
         publishedAt: status === "Open" ? new Date(Date.now() - Math.floor(Math.random() * 20) * 86400_000) : null,
         salaryCurrency: salaryCurrency || "EUR",
+        hiringTeam: {
+          create: (hiringTeam ?? []).map((m: { name: string; role: string }) => ({
+            userId: teamUserIds[m.name],
+            role: m.role,
+          })),
+        },
         ...rest,
       },
     });
